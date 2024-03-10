@@ -1,6 +1,9 @@
-from flask import Flask, request, send_file, render_template_string
+from flask import Flask, request, send_file, render_template_string, redirect, url_for
 from PIL import Image, ImageDraw, ImageFont
 import io
+import os
+
+app = Flask(__name__)
 
 form_html = '''
 <!doctype html>
@@ -23,56 +26,19 @@ form_html = '''
         <input type="date" id="date" name="date" required><br>
         <label for="logo">Logo (optional):</label><br>
         <input type="file" id="logo" name="logo"><br>
-        <label for="background">Certificate Background (optional):</label><br>
-        <input type="file" id="background" name="background"><br><br>
-        <input type="submit" value="Generate Certificate">
+        <label for="signature">Signature (optional):</label><br>
+        <input type="file" id="signature" name="signature"><br>
+        <label for="bg_color">Background Color (optional):</label><br>
+        <input type="color" id="bg_color" name="bg_color" value="#FFFFFF"><br>
+        <label for="font_color">Font Color:</label><br>
+        <input type="color" id="font_color" name="font_color" value="#000000"><br><br>
+        <input type="submit" name="action" value="Preview">
+        <input type="submit" name="action" value="Generate Certificate">
     </form>
 </body>
 </html>
 '''
-def generate_certificate(title, name, event, organizer, date, logo_file, background_file):
-    # Load background image or create a blank image
-    if background_file and 'background' in request.files:
-        background = Image.open(request.files['background'].stream)
-        img = background.convert('RGB')
-    else:
-        img = Image.new('RGB', (800, 600), color=(255, 255, 255))
 
-    d = ImageDraw.Draw(img)
-    font_path = "arial.ttf"  # Adjust this path as needed
-    font = ImageFont.truetype(font_path, 40)
-    small_font = ImageFont.truetype(font_path, 30)
-
-    # Optional: Add logo
-    if logo_file and 'logo' in request.files:
-        logo = Image.open(request.files['logo'].stream)
-        img.paste(logo, (10, 10))
-
-    # Text positions
-    title_pos = (400, 100)
-    name_pos = (400, 200)
-    event_pos = (400, 250)
-    organizer_pos = (400, 300)
-    date_pos = (400, 350)
-
-    # Text colors
-    title_color = (0, 0, 128)  # Navy
-    text_color = (0, 102, 204)  # Lighter blue
-
-    # Drawing text
-    d.text(title_pos, title, fill=title_color, font=font, anchor="mm")
-    d.text(name_pos, f"awarded to {name}", fill=text_color, font=small_font, anchor="mm")
-    d.text(event_pos, f"for participating in {event}", fill=text_color, font=small_font, anchor="mm")
-    d.text(organizer_pos, f"Organized by {organizer}", fill=text_color, font=small_font, anchor="mm")
-    d.text(date_pos, f"on {date}", fill=text_color, font=small_font, anchor="mm")
-
-    # Save the image to a bytes buffer
-    img_io = io.BytesIO()
-    img.save(img_io, 'JPEG', quality=70)
-    img_io.seek(0)
-    
-    return img_io
-app = Flask(__name__)
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -81,10 +47,55 @@ def index():
         event = request.form['event']
         organizer = request.form['organizer']
         date = request.form['date']
-        logo_file = request.files.get('logo')  # Optional
-        background_file = request.files.get('background')  # Optional
+        bg_color = request.form.get('bg_color', '#FFFFFF')
+        font_color = request.form.get('font_color', '#000000')
+        logo_file = request.files.get('logo')
+        signature_file = request.files.get('signature')
+        action = request.form['action']
 
-        certificate = generate_certificate(title, name, event, organizer, date, logo_file, background_file)
-        return send_file(certificate, mimetype='image/jpeg', as_attachment=True, download_name='certificate.jpg')
+        if action == "Preview":
+            certificate_path = generate_certificate(title, name, event, organizer, date, logo_file, None, signature_file, bg_color, font_color, True)
+            return redirect(url_for('static', filename=certificate_path, _external=True))
+        else:
+            certificate = generate_certificate(title, name, event, organizer, date, logo_file, None, signature_file, bg_color, font_color)
+            return send_file(certificate, mimetype='image/jpeg', as_attachment=True, download_name='certificate.jpg')
+    
     return render_template_string(form_html)
 
+def generate_certificate(title, name, event, organizer, date, logo_file, background_file, signature_file, bg_color="#FFFFFF", font_color="#000000", preview=False):
+    img = Image.new('RGB', (800, 600), color=bg_color)
+    d = ImageDraw.Draw(img)
+    font_path = os.path.join(app.root_path, 'arial.ttf')  # Adjust this path as needed
+    font = ImageFont.truetype(font_path, 40)
+    small_font = ImageFont.truetype(font_path, 30)
+
+    # Optional: Add logo
+    if logo_file:
+        logo = Image.open(logo_file.stream)
+        logo.thumbnail((100, 100))
+        img.paste(logo, (10, 10), logo)
+
+    # Optional: Add signature
+    if signature_file:
+        signature = Image.open(signature_file.stream)
+        signature.thumbnail((200, 100))
+        img.paste(signature, (600, 480), signature)
+
+    d.text((400, 50), title, fill=font_color, font=font, anchor="mm")
+    d.text((400, 150), f"awarded to {name}", fill=font_color, font=small_font, anchor="mm")
+    d.text((400, 200), f"for participating in {event}", fill=font_color, font=small_font, anchor="mm")
+    d.text((400, 250), f"Organized by {organizer}", fill=font_color, font=small_font, anchor="mm")
+    d.text((400, 300), f"on {date}", fill=font_color, font=small_font, anchor="mm")
+
+    if preview:
+        preview_path = "preview_certificate.jpg"
+        img.save(os.path.join(app.static_folder, preview_path))
+        return preview_path
+    else:
+        img_io = io.BytesIO()
+        img.save(img_io, 'JPEG', quality=70)
+        img_io.seek(0)
+        return img_io
+
+#if __name__ == '__main__':
+#    app.run(debug=True)
